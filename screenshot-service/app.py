@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI
+from PIL import Image
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from playwright.async_api import async_playwright
 
@@ -45,6 +46,8 @@ VIEWPORT_WIDTH = int(os.environ.get("VIEWPORT_WIDTH", "1600"))
 VIEWPORT_HEIGHT = int(os.environ.get("VIEWPORT_HEIGHT", "1200"))
 SETTLE_MS = int(os.environ.get("SETTLE_MS", "3000"))  # let chart animations finish
 INTERVAL_MINUTES = float(os.environ.get("INTERVAL_MINUTES", "30"))
+IMAGE_MAX_WIDTH = int(os.environ.get("IMAGE_MAX_WIDTH", "0"))  # 0 = keep original size
+CACHE_SECONDS = int(os.environ.get("CACHE_SECONDS", "60"))
 
 OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "/tmp/spohf"))
 CHART_FILE = OUTPUT_DIR / "chart.png"
@@ -138,6 +141,11 @@ async def capture() -> None:
 
             tmp = CHART_FILE.with_suffix(".tmp.png")
             await chart.screenshot(path=str(tmp))
+            if IMAGE_MAX_WIDTH:
+                with Image.open(tmp) as img:
+                    if img.width > IMAGE_MAX_WIDTH:
+                        height = round(img.height * IMAGE_MAX_WIDTH / img.width)
+                        img.resize((IMAGE_MAX_WIDTH, height), Image.LANCZOS).save(tmp)
             tmp.replace(CHART_FILE)  # atomic swap, never serve a half-written file
         finally:
             await browser.close()
@@ -199,7 +207,11 @@ def index():
 def chart_png():
     if not CHART_FILE.exists():
         return JSONResponse({"error": "no screenshot yet"}, status_code=503)
-    return FileResponse(CHART_FILE, media_type="image/png", headers=NO_CACHE)
+    return FileResponse(
+        CHART_FILE,
+        media_type="image/png",
+        headers={"Cache-Control": f"public, max-age={CACHE_SECONDS}"},
+    )
 
 
 @app.api_route("/health", methods=["GET", "HEAD"])
