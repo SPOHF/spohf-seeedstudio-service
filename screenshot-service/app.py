@@ -51,6 +51,7 @@ CACHE_SECONDS = int(os.environ.get("CACHE_SECONDS", "60"))
 
 OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "/tmp/spohf"))
 CHART_FILE = OUTPUT_DIR / "chart.png"
+CHART_JPG = OUTPUT_DIR / "chart.jpg"
 STATE_FILE = OUTPUT_DIR / "storage_state.json"  # reused session cookies
 
 status = {"last_attempt": None, "last_success": None, "last_error": None}
@@ -146,6 +147,10 @@ async def capture() -> None:
                     if img.width > IMAGE_MAX_WIDTH:
                         height = round(img.height * IMAGE_MAX_WIDTH / img.width)
                         img.resize((IMAGE_MAX_WIDTH, height), Image.LANCZOS).save(tmp)
+            tmp_jpg = CHART_JPG.with_suffix(".tmp.jpg")
+            with Image.open(tmp) as img:
+                img.convert("RGB").save(tmp_jpg, "JPEG", quality=90)
+            tmp_jpg.replace(CHART_JPG)
             tmp.replace(CHART_FILE)  # atomic swap, never serve a half-written file
         finally:
             await browser.close()
@@ -203,15 +208,24 @@ def index():
     )
 
 
-@app.api_route("/chart.png", methods=["GET", "HEAD"])
-def chart_png():
-    if not CHART_FILE.exists():
+def serve_image(path: Path, media_type: str):
+    if not path.exists():
         return JSONResponse({"error": "no screenshot yet"}, status_code=503)
     return FileResponse(
-        CHART_FILE,
-        media_type="image/png",
+        path,
+        media_type=media_type,
         headers={"Cache-Control": f"public, max-age={CACHE_SECONDS}"},
     )
+
+
+@app.api_route("/chart.png", methods=["GET", "HEAD"])
+def chart_png():
+    return serve_image(CHART_FILE, "image/png")
+
+
+@app.api_route("/chart.jpg", methods=["GET", "HEAD"])
+def chart_jpg():
+    return serve_image(CHART_JPG, "image/jpeg")
 
 
 @app.api_route("/health", methods=["GET", "HEAD"])
