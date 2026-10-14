@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from playwright.async_api import async_playwright
@@ -182,6 +183,10 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+# SenseCraft's web dashboard fetches the image via browser JS, which needs CORS
+app.add_middleware(
+    CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "HEAD", "OPTIONS"]
+)
 NO_CACHE = {"Cache-Control": "no-store, max-age=0"}
 
 
