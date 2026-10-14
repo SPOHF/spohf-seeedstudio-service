@@ -172,7 +172,7 @@ app = FastAPI(lifespan=lifespan)
 NO_CACHE = {"Cache-Control": "no-store, max-age=0"}
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 def index():
     version = int(CHART_FILE.stat().st_mtime) if CHART_FILE.exists() else 0
     updated = status["last_success"] or "never"
@@ -195,13 +195,13 @@ def index():
     )
 
 
-@app.get("/chart.png")
+@app.api_route("/chart.png", methods=["GET", "HEAD"])
 def chart_png():
     if not CHART_FILE.exists():
         return JSONResponse({"error": "no screenshot yet"}, status_code=503)
     return FileResponse(CHART_FILE, media_type="image/png", headers=NO_CACHE)
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health():
     return status
