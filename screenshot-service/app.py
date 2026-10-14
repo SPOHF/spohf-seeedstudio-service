@@ -1,11 +1,13 @@
 """SPOHF screenshot service.
 
 Logs into the SPOHF digital twin dashboard (OAuth login form), screenshots one
-chart every INTERVAL_MINUTES and serves it so SenseCraft HMI can pull it:
+or more figures every INTERVAL_MINUTES and serves them so SenseCraft HMI can pull them:
 
-  GET /           -> minimal HTML page showing the chart (use this in the Web Function)
-  GET /chart.png  -> the latest screenshot
-  GET /health     -> JSON status (last success / last error)
+  GET /             -> HTML page with all figures stacked (use in Web Content)
+  GET /fig/{n}      -> HTML page with figure n only (one Web Content widget per figure)
+  GET /fig/{n}.png  -> latest screenshot of figure n (also .jpg)
+  GET /chart.png    -> figure 1 (also .jpg)
+  GET /health       -> JSON status (last success / last error)
 """
 
 import asyncio
@@ -42,7 +44,12 @@ SUBMIT_SELECTOR = os.environ.get(
 # Optional extra click after login, e.g. Microsoft's "Stay signed in? -> Yes" (#idSIButton9)
 POST_LOGIN_CLICK_SELECTOR = os.environ.get("POST_LOGIN_CLICK_SELECTOR", "")
 
+# Figures to capture: FIG1_SELECTOR, FIG2_SELECTOR, ... (falls back to CHART_SELECTOR)
 CHART_SELECTOR = os.environ.get("CHART_SELECTOR", "body")
+FIG_SELECTORS = []
+while sel := os.environ.get(f"FIG{len(FIG_SELECTORS) + 1}_SELECTOR"):
+    FIG_SELECTORS.append(sel)
+FIG_SELECTORS = FIG_SELECTORS or [CHART_SELECTOR]
 VIEWPORT_WIDTH = int(os.environ.get("VIEWPORT_WIDTH", "1600"))
 VIEWPORT_HEIGHT = int(os.environ.get("VIEWPORT_HEIGHT", "1200"))
 SETTLE_MS = int(os.environ.get("SETTLE_MS", "3000"))  # let chart animations finish
@@ -51,8 +58,6 @@ IMAGE_MAX_WIDTH = int(os.environ.get("IMAGE_MAX_WIDTH", "0"))  # 0 = keep origin
 CACHE_SECONDS = int(os.environ.get("CACHE_SECONDS", "60"))
 
 OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "/tmp/spohf"))
-CHART_FILE = OUTPUT_DIR / "chart.png"
-CHART_JPG = OUTPUT_DIR / "chart.jpg"
 STATE_FILE = OUTPUT_DIR / "storage_state.json"  # reused session cookies
 
 status = {"last_attempt": None, "last_success": None, "last_error": None}
@@ -60,6 +65,10 @@ status = {"last_attempt": None, "last_success": None, "last_error": None}
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def fig_file(n: int, ext: str) -> Path:
+    return OUTPUT_DIR / f"fig{n}.{ext}"
 
 
 # --- screenshot --------------------------------------------------------------
@@ -127,7 +136,7 @@ async def capture() -> None:
 
             if DEMO_MODE:
                 await page.set_content(demo_html())
-                chart = page.locator("#chart")
+                selectors = ["#chart"]
             else:
                 await page.goto(DASHBOARD_URL, wait_until="networkidle")
 
@@ -137,28 +146,35 @@ async def capture() -> None:
                         await page.goto(DASHBOARD_URL, wait_until="networkidle")
                     await context.storage_state(path=str(STATE_FILE))
 
-                chart = page.locator(CHART_SELECTOR).first
-                await chart.wait_for(state="visible", timeout=30_000)
+                selectors = FIG_SELECTORS
+                for sel in selectors:
+                    await page.locator(sel).first.wait_for(state="visible", timeout=30_000)
                 await page.wait_for_timeout(SETTLE_MS)
 
-            tmp = CHART_FILE.with_suffix(".tmp.png")
-            await chart.screenshot(path=str(tmp))
-            if IMAGE_MAX_WIDTH:
-                with Image.open(tmp) as img:
-                    if img.width > IMAGE_MAX_WIDTH:
-                        height = round(img.height * IMAGE_MAX_WIDTH / img.width)
-                        img.resize((IMAGE_MAX_WIDTH, height), Image.LANCZOS).save(tmp)
-            tmp_jpg = CHART_JPG.with_suffix(".tmp.jpg")
-            with Image.open(tmp) as img:
-                img.convert("RGB").save(tmp_jpg, "JPEG", quality=90)
-            tmp_jpg.replace(CHART_JPG)
-            tmp.replace(CHART_FILE)  # atomic swap, never serve a half-written file
+            for n, sel in enumerate(selectors, start=1):
+                await save_figure(page.locator(sel).first, n)
         finally:
             await browser.close()
 
     status["last_success"] = now_iso()
     status["last_error"] = None
-    log.info("Screenshot saved to %s", CHART_FILE)
+    log.info("Saved %d figure(s) to %s", len(selectors), OUTPUT_DIR)
+
+
+async def save_figure(element, n: int) -> None:
+    png, jpg = fig_file(n, "png"), fig_file(n, "jpg")
+    tmp = png.with_suffix(".tmp.png")
+    await element.screenshot(path=str(tmp))
+    with Image.open(tmp) as img:
+        if IMAGE_MAX_WIDTH and img.width > IMAGE_MAX_WIDTH:
+            height = round(img.height * IMAGE_MAX_WIDTH / img.width)
+            img = img.resize((IMAGE_MAX_WIDTH, height), Image.LANCZOS)
+            img.save(tmp)
+        tmp_jpg = jpg.with_suffix(".tmp.jpg")
+        img.convert("RGB").save(tmp_jpg, "JPEG", quality=90)
+    # atomic swaps, never serve a half-written file
+    tmp_jpg.replace(jpg)
+    tmp.replace(png)
 
 
 async def capture_loop() -> None:
@@ -190,10 +206,16 @@ app.add_middleware(
 NO_CACHE = {"Cache-Control": "no-store, max-age=0"}
 
 
-@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
-def index():
-    version = int(CHART_FILE.stat().st_mtime) if CHART_FILE.exists() else 0
-    updated = status["last_success"] or "never"
+def figure_numbers() -> list[int]:
+    return [n for n in range(1, len(FIG_SELECTORS) + 1) if fig_file(n, "png").exists()]
+
+
+def image_page(figs: list[int], footer: bool) -> HTMLResponse:
+    imgs = "".join(
+        f'<img src="/fig/{n}.png?v={int(fig_file(n, "png").stat().st_mtime)}" alt="Figure {n}">'
+        for n in figs
+    )
+    updated = f'<p>Updated: {status["last_success"] or "never"}</p>' if footer else ""
     return HTMLResponse(
         f"""<!doctype html>
 <html><head><meta charset="utf-8">
@@ -206,8 +228,8 @@ def index():
   p {{ margin: 8px 16px; font-size: 20px; }}
 </style></head>
 <body>
-  <img src="/chart.png?v={version}" alt="SPOHF chart">
-  <p>Updated: {updated}</p>
+  {imgs or "<p>No screenshot yet</p>"}
+  {updated}
 </body></html>""",
         headers=NO_CACHE,
     )
@@ -223,16 +245,37 @@ def serve_image(path: Path, media_type: str):
     )
 
 
+@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
+def index():
+    return image_page(figure_numbers(), footer=True)
+
+
+# .png/.jpg routes must come before /fig/{n}, which would also match "1.png"
+@app.api_route("/fig/{n}.png", methods=["GET", "HEAD"])
+def figure_png(n: int):
+    return serve_image(fig_file(n, "png"), "image/png")
+
+
+@app.api_route("/fig/{n}.jpg", methods=["GET", "HEAD"])
+def figure_jpg(n: int):
+    return serve_image(fig_file(n, "jpg"), "image/jpeg")
+
+
+@app.api_route("/fig/{n}", methods=["GET", "HEAD"], response_class=HTMLResponse)
+def figure_page(n: int):
+    return image_page([n] if fig_file(n, "png").exists() else [], footer=False)
+
+
 @app.api_route("/chart.png", methods=["GET", "HEAD"])
 def chart_png():
-    return serve_image(CHART_FILE, "image/png")
+    return serve_image(fig_file(1, "png"), "image/png")
 
 
 @app.api_route("/chart.jpg", methods=["GET", "HEAD"])
 def chart_jpg():
-    return serve_image(CHART_JPG, "image/jpeg")
+    return serve_image(fig_file(1, "jpg"), "image/jpeg")
 
 
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health():
-    return status
+    return {**status, "figures": len(FIG_SELECTORS)}

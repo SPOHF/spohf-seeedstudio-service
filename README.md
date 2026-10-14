@@ -17,12 +17,13 @@ reTerminal E1004 <── SenseCraft HMI "Web Content" renders  https://<service>
 
 ## Endpoints
 
-| Path         | What                                                             |
-| ------------ | ---------------------------------------------------------------- |
-| `/`          | Minimal HTML page showing the chart. **Use this in SenseCraft.** |
-| `/chart.png` | Latest screenshot (PNG)                                          |
-| `/chart.jpg` | Latest screenshot (JPEG)                                         |
-| `/health`    | JSON: last attempt, last success, last error                     |
+| Path            | What                                                                   |
+| --------------- | ---------------------------------------------------------------------- |
+| `/`             | HTML page with all figures stacked. **Use this in SenseCraft.**        |
+| `/fig/{n}`      | HTML page with figure `n` only, for one Web Content widget per figure  |
+| `/fig/{n}.png`  | Latest screenshot of figure `n` (also `.jpg`)                          |
+| `/chart.png`    | Figure 1 (also `.jpg`)                                                 |
+| `/health`       | JSON: last attempt, last success, last error, number of figures        |
 
 Without `DASHBOARD_URL` the service runs in **demo mode** and renders a random
 bar chart instead, which is handy for testing the display pipeline.
@@ -33,10 +34,12 @@ All settings are environment variables (see `screenshot-service/.env.example`).
 
 | Variable                             | Example / default                                                          |
 | ------------------------------------ | -------------------------------------------------------------------------- |
-| `DASHBOARD_URL`                      | `https://wp6-blue.spohf.fontysvenlo.dev/gdd`                               |
+| `DASHBOARD_URL`                      | `https://wp6-red.spohf.fontysvenlo.dev/multi_height/crop-climate`          |
 | `LOGIN_USERNAME`                     | account email                                                              |
 | `LOGIN_PASSWORD`                     | account password                                                           |
-| `CHART_SELECTOR`                     | `.js-plotly-plot` (CSS selector of the element to capture; default `body`) |
+| `FIG1_SELECTOR`                      | `article.card:has(h2:has-text("Risk timeline"))` → `/fig/1`                |
+| `FIG2_SELECTOR`                      | `article.card:has(h2:has-text("Climate —"))` → `/fig/2`                    |
+| `CHART_SELECTOR`                     | Single figure if no `FIGn_SELECTOR` is set (default `body`)                |
 | `INTERVAL_MINUTES`                   | `30`                                                                       |
 | `VIEWPORT_WIDTH` / `VIEWPORT_HEIGHT` | `1600` / `1200`                                                            |
 | `SETTLE_MS`                          | `3000` (wait for chart animations)                                         |
@@ -60,7 +63,8 @@ Current deployment: https://spohf-seeedstudio-service-production.up.railway.app/
 ## SenseCraft HMI setup
 
 1. SenseCraft HMI portal → **Workspace → My Pages → + Web Content**.
-2. URL: `https://spohf-seeedstudio-service-production.up.railway.app/`
+2. URL: `https://spohf-seeedstudio-service-production.up.railway.app/` (all figures),
+   or one widget per figure with `/fig/1`, `/fig/2`, ...
 3. Set the device **Interval (min)**. The panel re-renders the page on every wake-up.
 
 Notes:
