@@ -6,12 +6,16 @@ e-paper display.
 
 The dashboard sits behind a Keycloak (OAuth2) login, so SenseCraft HMI can't
 load it directly. This service logs in with a headless browser, screenshots the
-chart on a timer, and serves it on a public URL that SenseCraft HMI renders on
-the panel.
+chart when the panel asks for it, and serves it on a public URL that SenseCraft
+HMI renders on the panel.
+
+Capturing is on demand: a request re-captures when the last screenshot is older
+than `MAX_AGE_MINUTES`, so nothing runs between panel wake-ups. That lets
+Railway's Serverless mode sleep the container, and you only pay while it's awake.
 
 ```
-SPOHF dashboard ──(Playwright login + screenshot every N min)──> this service (Railway)
-                                                                      │
+SPOHF dashboard ──(Playwright login + screenshot on request)──> this service (Railway)
+                                                                     │
 reTerminal E1004 <── SenseCraft HMI "Web Content" renders  https://<service>/
 ```
 
@@ -40,7 +44,7 @@ All settings are environment variables (see `screenshot-service/.env.example`).
 | `FIG1_SELECTOR`                      | `article.card:has(h2:has-text("Risk timeline"))` → `/fig/1`                |
 | `FIG2_SELECTOR`                      | `article.card:has(h2:has-text("Climate —"))` → `/fig/2`                    |
 | `CHART_SELECTOR`                     | Single figure if no `FIGn_SELECTOR` is set (default `body`)                |
-| `INTERVAL_MINUTES`                   | `30`                                                                       |
+| `MAX_AGE_MINUTES`                    | `5` (re-capture on request if the last capture is older)                   |
 | `VIEWPORT_WIDTH` / `VIEWPORT_HEIGHT` | `1600` / `1200`                                                            |
 | `SETTLE_MS`                          | `3000` (wait for chart animations)                                         |
 | `IMAGE_MAX_WIDTH`                    | `0` (no resize)                                                            |
@@ -56,7 +60,10 @@ credentials: `.env` is git-ignored, and on Railway they live in service variable
 2. Service **Settings → Root Directory**: `/screenshot-service` (Railway builds the `Dockerfile` there).
 3. **Settings → Networking → Generate Domain.**
 4. **Variables**: set the ones from the table above.
-5. Every push to `main` redeploys automatically. Check `/health` for `last_success`.
+5. **Settings → Deploy → Serverless**: enable it. The container sleeps after
+   10 min without outbound traffic and wakes on the next request. The first
+   request after sleeping takes longer (cold start + login + screenshot).
+6. Every push to `main` redeploys automatically. Check `/health` for `last_success`.
 
 Current deployment: https://spohf-seeedstudio-service-production.up.railway.app/
 
@@ -72,5 +79,6 @@ Notes:
 - Use **Web Content**, not the image/Gallery upload. Uploaded images are copied
   once and never refresh.
 - The panel can't be forced to refresh remotely. It sleeps between intervals
-  (minimum 5 min). Keep `INTERVAL_MINUTES` a bit shorter than the device interval.
+  (minimum 5 min). Keep `MAX_AGE_MINUTES` shorter than the device interval, so
+  every wake-up gets a fresh screenshot.
 - Short intervals drain the battery fast. Use USB power for ≤ 30 min.

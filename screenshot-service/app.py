@@ -1,7 +1,9 @@
 """SPOHF screenshot service.
 
 Logs into the SPOHF digital twin dashboard (OAuth login form), screenshots one
-or more figures every INTERVAL_MINUTES and serves them so SenseCraft HMI can pull them:
+or more figures on demand and serves them so SenseCraft HMI can pull them. A
+request triggers a fresh capture when the last one is older than MAX_AGE_MINUTES,
+so nothing runs between panel wake-ups and Railway Serverless can sleep the app.
 
   GET /             -> HTML page with all figures stacked (use in Web Content)
   GET /fig/{n}      -> HTML page with figure n only (one Web Content widget per figure)
@@ -14,6 +16,7 @@ import asyncio
 import logging
 import os
 import random
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,7 +56,7 @@ FIG_SELECTORS = FIG_SELECTORS or [CHART_SELECTOR]
 VIEWPORT_WIDTH = int(os.environ.get("VIEWPORT_WIDTH", "1600"))
 VIEWPORT_HEIGHT = int(os.environ.get("VIEWPORT_HEIGHT", "1200"))
 SETTLE_MS = int(os.environ.get("SETTLE_MS", "3000"))  # let chart animations finish
-INTERVAL_MINUTES = float(os.environ.get("INTERVAL_MINUTES", "30"))
+MAX_AGE_MINUTES = float(os.environ.get("MAX_AGE_MINUTES", "5"))  # re-capture if older
 IMAGE_MAX_WIDTH = int(os.environ.get("IMAGE_MAX_WIDTH", "0"))  # 0 = keep original size
 CACHE_SECONDS = int(os.environ.get("CACHE_SECONDS", "60"))
 
@@ -61,6 +64,8 @@ OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "/tmp/spohf"))
 STATE_FILE = OUTPUT_DIR / "storage_state.json"  # reused session cookies
 
 status = {"last_attempt": None, "last_success": None, "last_error": None}
+capture_lock = asyncio.Lock()
+last_attempt_at: float | None = None  # time.monotonic() of the last capture attempt
 
 
 def now_iso() -> str:
@@ -177,15 +182,24 @@ async def save_figure(element, n: int) -> None:
     tmp.replace(png)
 
 
-async def capture_loop() -> None:
-    while True:
+async def ensure_fresh() -> None:
+    """Capture new figures if the last attempt is older than MAX_AGE_MINUTES.
+
+    The lock makes the page request and the image requests that follow it share
+    one capture. Failed attempts also count, so a broken login isn't retried on
+    every request.
+    """
+    global last_attempt_at
+    async with capture_lock:
+        if last_attempt_at is not None and time.monotonic() - last_attempt_at < MAX_AGE_MINUTES * 60:
+            return
+        last_attempt_at = time.monotonic()
         try:
             await capture()
         except Exception as e:  # keep serving the last good image
             status["last_error"] = f"{now_iso()} {type(e).__name__}: {e}"
             log.exception("Capture failed")
             STATE_FILE.unlink(missing_ok=True)  # force fresh login next time
-        await asyncio.sleep(INTERVAL_MINUTES * 60)
 
 
 # --- web server --------------------------------------------------------------
@@ -193,9 +207,7 @@ async def capture_loop() -> None:
 async def lifespan(_app: FastAPI):
     if DEMO_MODE:
         log.warning("DASHBOARD_URL is not set, running in DEMO mode (random bar chart)")
-    task = asyncio.create_task(capture_loop())
     yield
-    task.cancel()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -235,7 +247,8 @@ def image_page(figs: list[int], footer: bool) -> HTMLResponse:
     )
 
 
-def serve_image(path: Path, media_type: str):
+async def serve_image(path: Path, media_type: str):
+    await ensure_fresh()
     if not path.exists():
         return JSONResponse({"error": "no screenshot yet"}, status_code=503)
     return FileResponse(
@@ -246,34 +259,36 @@ def serve_image(path: Path, media_type: str):
 
 
 @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
-def index():
+async def index():
+    await ensure_fresh()
     return image_page(figure_numbers(), footer=True)
 
 
 # .png/.jpg routes must come before /fig/{n}, which would also match "1.png"
 @app.api_route("/fig/{n}.png", methods=["GET", "HEAD"])
-def figure_png(n: int):
-    return serve_image(fig_file(n, "png"), "image/png")
+async def figure_png(n: int):
+    return await serve_image(fig_file(n, "png"), "image/png")
 
 
 @app.api_route("/fig/{n}.jpg", methods=["GET", "HEAD"])
-def figure_jpg(n: int):
-    return serve_image(fig_file(n, "jpg"), "image/jpeg")
+async def figure_jpg(n: int):
+    return await serve_image(fig_file(n, "jpg"), "image/jpeg")
 
 
 @app.api_route("/fig/{n}", methods=["GET", "HEAD"], response_class=HTMLResponse)
-def figure_page(n: int):
+async def figure_page(n: int):
+    await ensure_fresh()
     return image_page([n] if fig_file(n, "png").exists() else [], footer=False)
 
 
 @app.api_route("/chart.png", methods=["GET", "HEAD"])
-def chart_png():
-    return serve_image(fig_file(1, "png"), "image/png")
+async def chart_png():
+    return await serve_image(fig_file(1, "png"), "image/png")
 
 
 @app.api_route("/chart.jpg", methods=["GET", "HEAD"])
-def chart_jpg():
-    return serve_image(fig_file(1, "jpg"), "image/jpeg")
+async def chart_jpg():
+    return await serve_image(fig_file(1, "jpg"), "image/jpeg")
 
 
 @app.api_route("/health", methods=["GET", "HEAD"])
