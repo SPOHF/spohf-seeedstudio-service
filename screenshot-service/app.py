@@ -215,9 +215,8 @@ def figure_numbers() -> list[int]:
     return [n for n in range(1, len(FIG_SELECTORS) + 1) if fig_file(n, "png").exists()]
 
 
-def local_time(iso: str | None) -> str:
-    dt = datetime.fromisoformat(iso) if iso else datetime.now(timezone.utc)
-    return dt.astimezone(DISPLAY_TZ).strftime("%d.%m.%Y %H:%M")
+def local_time() -> str:
+    return datetime.now(DISPLAY_TZ).strftime("%d.%m.%Y %H:%M")
 
 
 def image_page(figs: list[int], chrome: bool) -> HTMLResponse:
@@ -227,11 +226,11 @@ def image_page(figs: list[int], chrome: bool) -> HTMLResponse:
     )
     header = footer = ""
     if chrome:  # dashboard title + timestamp on top, partner logos at the bottom
-        header = f"""<header><h1>SPoHF-Dashboard</h1><span>{local_time(None)}</span></header>"""
-        data_time = local_time(status["last_success"]) if status["last_success"] else "never"
+        header = f"""<header><h1>SPoHF-Dashboard</h1><span>{local_time()}</span></header>"""
         footer = f"""<footer>
     <img src="/static/interreg-de-nl.png" alt="Interreg Deutschland-Nederland">
-    <span>Data: {data_time}</span>
+    <span>Made by Fontys-Venlo-Informatics with 💚
+      &ndash; IT made in Germany &amp; Netherlands</span>
     <img src="/static/fontys.png" alt="Fontys Venlo">
   </footer>"""
     return HTMLResponse(
@@ -250,8 +249,7 @@ def image_page(figs: list[int], chrome: bool) -> HTMLResponse:
   header h1 {{ margin: 0; font-size: 36px; }}
   header span {{ font-size: 28px; font-weight: bold; }}
   footer {{ border-top: 3px solid #000; font-size: 18px; }}
-  footer img {{ height: 64px; }}
-</style></head>
+  footer img {{ height: 64px; }}</style></head>
 <body>
   {header}
   {imgs or "<p>No screenshot yet</p>"}
