@@ -19,7 +19,7 @@ reTerminal E1004 <── SenseCraft HMI "Web Content" renders  https://<service>
 
 | Path            | What                                                                   |
 | --------------- | ---------------------------------------------------------------------- |
-| `/`             | HTML page with all figures stacked. **Use this in SenseCraft.**        |
+| `/`             | Header (title + time), all figures stacked, logo footer. **Use this in SenseCraft.** |
 | `/fig/{n}`      | HTML page with figure `n` only, for one Web Content widget per figure  |
 | `/fig/{n}.png`  | Latest screenshot of figure `n` (also `.jpg`)                          |
 | `/chart.png`    | Figure 1 (also `.jpg`)                                                 |
@@ -45,6 +45,7 @@ All settings are environment variables (see `screenshot-service/.env.example`).
 | `SETTLE_MS`                          | `3000` (wait for chart animations)                                         |
 | `IMAGE_MAX_WIDTH`                    | `0` (no resize)                                                            |
 | `CACHE_SECONDS`                      | `60`                                                                       |
+| `DISPLAY_TIMEZONE`                   | `Europe/Amsterdam` (header/footer timestamps)                              |
 
 The login account must sign in with email + password directly on the Keycloak
 form. SSO via "Fontys Venlo staff" (MFA) can't be automated. Never commit

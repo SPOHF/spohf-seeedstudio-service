@@ -3,7 +3,7 @@
 Logs into the SPOHF digital twin dashboard (OAuth login form), screenshots one
 or more figures every INTERVAL_MINUTES and serves them so SenseCraft HMI can pull them:
 
-  GET /             -> HTML page with all figures stacked (use in Web Content)
+  GET /             -> HTML page with header, all figures stacked, logo footer (use in Web Content)
   GET /fig/{n}      -> HTML page with figure n only (one Web Content widget per figure)
   GET /fig/{n}.png  -> latest screenshot of figure n (also .jpg)
   GET /chart.png    -> figure 1 (also .jpg)
@@ -17,11 +17,13 @@ import random
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from playwright.async_api import async_playwright
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -56,6 +58,8 @@ SETTLE_MS = int(os.environ.get("SETTLE_MS", "3000"))  # let chart animations fin
 INTERVAL_MINUTES = float(os.environ.get("INTERVAL_MINUTES", "30"))
 IMAGE_MAX_WIDTH = int(os.environ.get("IMAGE_MAX_WIDTH", "0"))  # 0 = keep original size
 CACHE_SECONDS = int(os.environ.get("CACHE_SECONDS", "60"))
+DISPLAY_TZ = ZoneInfo(os.environ.get("DISPLAY_TIMEZONE", "Europe/Amsterdam"))
+STATIC_DIR = Path(__file__).parent / "static"  # partner logos for the footer
 
 OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "/tmp/spohf"))
 STATE_FILE = OUTPUT_DIR / "storage_state.json"  # reused session cookies
@@ -203,6 +207,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "HEAD", "OPTIONS"]
 )
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 NO_CACHE = {"Cache-Control": "no-store, max-age=0"}
 
 
@@ -210,12 +215,25 @@ def figure_numbers() -> list[int]:
     return [n for n in range(1, len(FIG_SELECTORS) + 1) if fig_file(n, "png").exists()]
 
 
-def image_page(figs: list[int], footer: bool) -> HTMLResponse:
+def local_time(iso: str | None) -> str:
+    dt = datetime.fromisoformat(iso) if iso else datetime.now(timezone.utc)
+    return dt.astimezone(DISPLAY_TZ).strftime("%d.%m.%Y %H:%M")
+
+
+def image_page(figs: list[int], chrome: bool) -> HTMLResponse:
     imgs = "".join(
-        f'<img src="/fig/{n}.png?v={int(fig_file(n, "png").stat().st_mtime)}" alt="Figure {n}">'
+        f'<img class="fig" src="/fig/{n}.png?v={int(fig_file(n, "png").stat().st_mtime)}" alt="Figure {n}">'
         for n in figs
     )
-    updated = f'<p>Updated: {status["last_success"] or "never"}</p>' if footer else ""
+    header = footer = ""
+    if chrome:  # dashboard title + timestamp on top, partner logos at the bottom
+        header = f"""<header><h1>SPoHF-Dashboard</h1><span>{local_time(None)}</span></header>"""
+        data_time = local_time(status["last_success"]) if status["last_success"] else "never"
+        footer = f"""<footer>
+    <img src="/static/interreg-de-nl.png" alt="Interreg Deutschland-Nederland">
+    <span>Data: {data_time}</span>
+    <img src="/static/fontys.png" alt="Fontys Venlo">
+  </footer>"""
     return HTMLResponse(
         f"""<!doctype html>
 <html><head><meta charset="utf-8">
@@ -224,12 +242,20 @@ def image_page(figs: list[int], footer: bool) -> HTMLResponse:
   html, body {{ margin: 0; height: 100%; background: #fff; color: #000;
                font-family: sans-serif; }}
   body {{ display: flex; flex-direction: column; }}
-  img {{ flex: 1; min-height: 0; width: 100%; object-fit: contain; }}
+  .fig {{ flex: 1; min-height: 0; width: 100%; object-fit: contain; }}
   p {{ margin: 8px 16px; font-size: 20px; }}
+  header, footer {{ display: flex; align-items: center; justify-content: space-between;
+                    padding: 8px 16px; }}
+  header {{ border-bottom: 3px solid #000; }}
+  header h1 {{ margin: 0; font-size: 36px; }}
+  header span {{ font-size: 28px; font-weight: bold; }}
+  footer {{ border-top: 3px solid #000; font-size: 18px; }}
+  footer img {{ height: 64px; }}
 </style></head>
 <body>
+  {header}
   {imgs or "<p>No screenshot yet</p>"}
-  {updated}
+  {footer}
 </body></html>""",
         headers=NO_CACHE,
     )
@@ -247,7 +273,7 @@ def serve_image(path: Path, media_type: str):
 
 @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 def index():
-    return image_page(figure_numbers(), footer=True)
+    return image_page(figure_numbers(), chrome=True)
 
 
 # .png/.jpg routes must come before /fig/{n}, which would also match "1.png"
@@ -263,7 +289,7 @@ def figure_jpg(n: int):
 
 @app.api_route("/fig/{n}", methods=["GET", "HEAD"], response_class=HTMLResponse)
 def figure_page(n: int):
-    return image_page([n] if fig_file(n, "png").exists() else [], footer=False)
+    return image_page([n] if fig_file(n, "png").exists() else [], chrome=False)
 
 
 @app.api_route("/chart.png", methods=["GET", "HEAD"])
