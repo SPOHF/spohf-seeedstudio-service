@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+import playwright
 from playwright.async_api import async_playwright
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -63,6 +64,15 @@ STATIC_DIR = Path(__file__).parent / "static"  # partner logos for the footer
 
 OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "/tmp/spohf"))
 STATE_FILE = OUTPUT_DIR / "storage_state.json"  # reused session cookies
+
+# Files a capture reads: Chromium, Playwright's node driver, fonts, system libs.
+# Railway bills their page cache as container memory (~450 MB after a capture).
+CACHE_DIRS = [
+    Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or Path.home() / ".cache/ms-playwright"),
+    Path(playwright.__file__).parent / "driver",
+    Path("/usr/share/fonts"),
+    *Path("/usr/lib").glob("*-linux-gnu"),
+]
 
 status = {"last_attempt": None, "last_success": None, "last_error": None}
 
@@ -181,6 +191,30 @@ async def save_figure(element, n: int) -> None:
     tmp.replace(png)
 
 
+def drop_page_cache() -> None:
+    """Tell the kernel to drop the cached pages of CACHE_DIRS once the browser is gone.
+
+    They are only needed during a capture and are reread from disk next time.
+    Pages still mapped by this Python process are kept by the kernel.
+    """
+    files = 0
+    for root in CACHE_DIRS:
+        for dirpath, _dirnames, filenames in os.walk(root):
+            for name in filenames:
+                try:  # O_NONBLOCK: never hang on a FIFO
+                    fd = os.open(os.path.join(dirpath, name), os.O_RDONLY | os.O_NONBLOCK)
+                except OSError:
+                    continue
+                try:
+                    os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+                    files += 1
+                except OSError:
+                    pass
+                finally:
+                    os.close(fd)
+    log.info("Dropped page cache of %d files", files)
+
+
 async def capture_loop() -> None:
     while True:
         try:
@@ -189,6 +223,7 @@ async def capture_loop() -> None:
             status["last_error"] = f"{now_iso()} {type(e).__name__}: {e}"
             log.exception("Capture failed")
             STATE_FILE.unlink(missing_ok=True)  # force fresh login next time
+        await asyncio.to_thread(drop_page_cache)  # also after a failed capture
         await asyncio.sleep(INTERVAL_MINUTES * 60)
 
 

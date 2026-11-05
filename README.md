@@ -59,6 +59,11 @@ credentials: `.env` is git-ignored, and on Railway they live in service variable
 4. **Variables**: set the ones from the table above.
 5. Every push to `main` redeploys automatically. Check `/health` for `last_success`.
 
+Railway bills the container's file cache as memory. After each capture the
+service drops the cache of Chromium's files (log line `Dropped page cache of N files`),
+so idle memory stays close to what the app itself uses (~100 MB in local tests)
+instead of several hundred MB.
+
 Current deployment: https://spohf-seeedstudio-service-production.up.railway.app/
 
 ## SenseCraft HMI setup
