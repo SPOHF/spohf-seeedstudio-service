@@ -259,9 +259,14 @@ def image_page(figs: list[int], chrome: bool) -> HTMLResponse:
         f'<img class="fig" src="/fig/{n}.png?v={int(fig_file(n, "png").stat().st_mtime)}" alt="Figure {n}">'
         for n in figs
     )
-    header = footer = ""
-    if chrome:  # dashboard title + timestamp on top, partner logos at the bottom
+    header = glossary = footer = ""
+    if chrome:  # dashboard title + timestamp on top, glossary + partner logos at the bottom
         header = f"""<header><h1>SPoHF-Dashboard</h1><span>{local_time()}</span></header>"""
+        glossary = """<div class="glossary">
+    <div><sup>1</sup> <b>PAR</b> (Photosynthetically Active Radiation) &ndash; the part of light that plants can use to grow.</div>
+    <div><sup>2</sup> <b>DLI</b> (Daily Light Integral) &ndash; how much of that light a plant gets in one whole day.</div>
+    <div><sup>3</sup> <b>VPD</b> (Vapour Pressure Deficit) &ndash; how dry the air is, so how fast plants lose water.</div>
+  </div>"""
         footer = f"""<footer>
     <img src="/static/interreg-de-nl.png" alt="Interreg Deutschland-Nederland">
     <span>Made by Fontys-Venlo-Informatics with 💚
@@ -284,10 +289,12 @@ def image_page(figs: list[int], chrome: bool) -> HTMLResponse:
   header h1 {{ margin: 0; font-size: 36px; }}
   header span {{ font-size: 28px; font-weight: bold; }}
   footer {{ border-top: 3px solid #000; font-size: 18px; }}
-  footer img {{ height: 64px; }}</style></head>
+  footer img {{ height: 64px; }}
+  .glossary {{ padding: 8px 16px; font-size: 18px; text-align: left; line-height: 1.4; }}</style></head>
 <body>
   {header}
   {imgs or "<p>No screenshot yet</p>"}
+  {glossary}
   {footer}
 </body></html>""",
         headers=NO_CACHE,
